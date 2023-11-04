@@ -1,6 +1,5 @@
 package com.example.opentelemetry;
 
-import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.header.Headers;
@@ -31,8 +30,6 @@ public class ReactiveKafkaConsumer {
 
     private final KafkaReceiver<String, Map> kafkaReceiver;
 
-    private final ObservationRegistry observationRegistry;
-
     Consumer<Throwable> logGenericError =
             e -> log.error("Unhandled generic error: {}", e.getMessage(), e);
 
@@ -43,7 +40,6 @@ public class ReactiveKafkaConsumer {
     public Disposable consume() {
         return kafkaReceiver
                 .receive()
-                .contextCapture()
                 .delayElements(Duration.ofMillis(delay))
                 .doOnNext(logEventProcessing)
                 .flatMap(this::handleReceiverRecord)
