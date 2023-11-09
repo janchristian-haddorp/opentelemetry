@@ -1,5 +1,7 @@
 package com.example.opentelemetry;
 
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.header.Headers;
@@ -11,6 +13,8 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.kafka.receiver.KafkaReceiver;
 import reactor.kafka.receiver.ReceiverRecord;
+import reactor.kafka.receiver.observation.KafkaReceiverObservation;
+import reactor.kafka.receiver.observation.KafkaRecordReceiverContext;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -30,6 +34,8 @@ public class ReactiveKafkaConsumer {
 
     private final KafkaReceiver<String, Map> kafkaReceiver;
 
+    private final ObservationRegistry observationRegistry;
+
     Consumer<Throwable> logGenericError =
             e -> log.error("Unhandled generic error: {}", e.getMessage(), e);
 
@@ -42,6 +48,21 @@ public class ReactiveKafkaConsumer {
                 .receive()
                 .delayElements(Duration.ofMillis(delay))
                 .doOnNext(logEventProcessing)
+                .flatMap(receiverRecord -> {
+                    var receiverObservation =
+                            KafkaReceiverObservation.RECEIVER_OBSERVATION.start(null,
+                                    KafkaReceiverObservation.DefaultKafkaReceiverObservationConvention.INSTANCE,
+                                    () ->
+                                            new KafkaRecordReceiverContext(
+                                                    receiverRecord, "user.receiver",
+                                                    bootstrapServers),
+                                    observationRegistry);
+                    return Mono.just(receiverRecord)
+                            .doOnTerminate(receiverObservation::stop)
+                            .doOnError(receiverObservation::error)
+                            .contextWrite(context ->
+                                    context.put(ObservationThreadLocalAccessor.KEY, receiverObservation));
+                })
                 .flatMap(this::handleReceiverRecord)
                 .subscribe(
                         receiverRecord -> receiverRecord.receiverOffset().acknowledge(),
@@ -80,7 +101,7 @@ public class ReactiveKafkaConsumer {
                 + ", leaderEpoch = " + rec.leaderEpoch().orElse(null)
                 + ", offset = " + rec.offset()
                 + ", " + rec.timestampType() + " = " + rec.timestamp()
-                + ", serialized key size = "  + rec.serializedKeySize()
+                + ", serialized key size = " + rec.serializedKeySize()
                 + ", serialized value size = " + rec.serializedValueSize()
                 + ", headers = " + retrieveHeader(rec.headers())
                 + ", key = " + rec.key()
